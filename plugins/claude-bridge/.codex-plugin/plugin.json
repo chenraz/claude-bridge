@@ -1,0 +1,16 @@
+{
+  "name": "claude-bridge",
+  "version": "0.1.0",
+  "description": "Use Claude from your local desktop chat, with GPT reviewing and explaining the work.",
+  "author": {
+    "name": "chenraz"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Claude Bridge",
+    "shortDescription": "Work with Claude from this desktop chat",
+    "longDescription": "GPT sends tasks to Claude through your own API key, reviews the results and applies authorized changes. Requires Python 3.10+ and local command access.",
+    "developerName": "chenraz",
+    "category": "Productivity"
+  }
+}

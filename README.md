@@ -4,7 +4,25 @@ Work with Claude from your existing local Codex desktop chat. You talk to GPT;
 GPT sends implementation tasks to Claude, reviews the replies, applies authorized
 changes, runs available checks and explains the results. No separate GUI or server.
 
-## Install from GitHub
+## Install through the desktop interface
+
+In **Plugins > Add marketplace**, enter:
+
+- **Source:** `https://github.com/chenraz/claude-bridge`
+- **Git ref:** `main`
+- **Sparse paths:** leave completely empty.
+
+Select **Add marketplace**, then install **Claude Bridge** from **Chenraz Tools**.
+Start a new local chat and ask `Use Claude Bridge. Set up my local configuration.`
+Then enter your own key in the local `.env` file as described below.
+
+The Source must be the repository URL, with no `/tree/main/claude-bridge` suffix.
+A folder URL is only used by the separate skill-installer route below.
+The repository includes a marketplace catalog and a plugin manifest for this flow.
+If you previously installed the standalone skill, use one installation route to
+avoid duplicate skill entries.
+
+## Alternative: install the standalone skill from GitHub
 
 In a **local Codex desktop chat**, send:
 

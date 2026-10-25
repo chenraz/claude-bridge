@@ -1,0 +1,4 @@
+interface:
+  display_name: "Claude Bridge"
+  short_description: "Work with Claude directly from your desktop chat"
+  default_prompt: "Use $claude-bridge to build my app through Claude and explain the results simply."
