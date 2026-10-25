@@ -5,7 +5,7 @@ You describe the app; GPT sends tasks to the official Claude Code CLI, reviews t
 proposed code, applies authorized changes and explains the result. No second GUI.
 
 The package ID and repository remain `claude-bridge` for existing installations.
-**Version 0.3.0 keeps subscription sign-in and adds persistent native Claude Code sessions.**
+**Version 0.4.0 adds automatic browser sign-in when the customer is disconnected.**
 
 ## Install through the desktop interface
 
@@ -28,28 +28,32 @@ https://github.com/chenraz/claude-bridge/tree/main/claude-bridge
 
 Use one installation route to avoid duplicate skills.
 
-## One-time customer setup: sign in, no API key
+## Start using it: sign-in opens automatically
 
-1. Install the **official Claude Code CLI** using
-   [Anthropic's setup instructions](https://code.claude.com/docs/en/setup).
-2. In your own terminal, run `claude auth login` and complete the official browser
-   sign-in with the account that holds your Claude Pro/Max subscription. Choose
-   the Claude subscription account rather than Console/API billing.
-3. In your local desktop chat, write:
+After installation, plugin setup checks the connection. If the desktop app does
+not run setup immediately, the first bridge request performs the same check.
+A valid Claude Code subscription login is reused. If signed out, the bridge starts
+the official Claude Code browser sign-in automatically. Complete that browser
+step with your own subscription account, then the assistant checks the connection.
+No API key, .env, password in chat or user-typed terminal command is needed.
+
+In your local desktop chat, write:
 
 ```text
-Use Claude Bridge for all app-development work in this chat until I tell you to stop.
-Check my Claude Code subscription login, then help me build my app.
+Use Claude Bridge for all app-development work in this chat. Build my app: ...
 ```
 
-The bridge checks sanitized authentication metadata before each task. Each customer
-uses their own subscription and authenticates directly with Anthropic. No password,
-API key, exported OAuth token or .env file is needed in the default mode.
+**Prerequisites:** official Claude Code CLI, Python 3.10+, local command tools and
+network access. If Claude Code is missing, ask the assistant to help install it
+from [Anthropic's official source](https://code.claude.com/docs/en/setup).
+The bridge does not install it silently or bypass host permission approvals.
 
-**Requirements:** recent official Claude Code CLI (including `--safe-mode` support),
-Python 3.10+, local file/command tools and network access in the desktop app.
-A file-upload-only chat cannot run it. The host app's subscription requirements
-are independent from your Claude subscription.
+Browser sign-in waits up to five minutes and duplicate launches are suppressed.
+If the browser does not open or login times out, tell the assistant; it can check
+status and troubleshoot. It does not capture authorization codes or passwords.
+An existing different account or provider override is reported rather than changed.
+The host can still require approval to run commands. A chat that has ended does
+not automatically wake up when login completes; return to the chat to continue.
 
 [מדריך קצר בעברית (PDF)](docs/guide-he.pdf)
 

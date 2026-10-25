@@ -11,18 +11,30 @@ user explicitly asks to inspect or resume the Claude Code conversation.
 
 ## Default: the customer's subscription
 Resolve `scripts/bridge.py` relative to this SKILL.md. Use Python 3.10+.
-Run `python3 <bridge.py> status` (Windows: `py -3`). This checks official Claude Code
-login and returns only sanitized metadata; it does not send a model prompt.
+At first use run `python3 <bridge.py> ensure-login` (Windows: `py -3`).
+It checks official Claude Code authentication and, only if signed out, automatically
+starts the official subscription browser login. Do not require the user to ask
+for connection or type a terminal command. Tell them briefly that Claude sign-in
+is opening, then let them complete it privately in the browser.
 
-If the official CLI is missing, direct the customer to
-https://code.claude.com/docs/en/setup. Help install from the official source when
-authorized. The customer then runs `claude auth login` in their own terminal and
-completes the official browser sign-in with their own Pro/Max subscription account.
+If `action_required` is `sign_in`, retain the user's development task and do not
+claim it was sent. Check `status` after the browser step. While actively waiting,
+space checks about 15 seconds apart, communicate useful progress, and stop after
+five minutes if the user has not completed sign-in. If the turn has ended, continue
+when the user returns. No timer or background job will automatically resume the
+GPT chat. `ensure-login` avoids duplicate login launches for five minutes.
+
+If the official CLI is missing, help install it from the official source when
+authorized: https://code.claude.com/docs/en/setup. Use an available Python 3.10+.
+If environment overrides, a different signed-in account, or an authentication
+status error is reported, explain the issue instead of forcing a new login.
+Normal host permission prompts still apply to launching commands and opening a
+browser; never approve human-only access consent on the user's behalf.
 Do not collect passwords, export OAuth tokens, read credential files or reuse their
 subscription credential against the Messages API. A Claude chat subscription is
 not an API key. Each customer signs in on their own computer.
 
-Run status again after login. Do not request an API key or create .env in subscription
+Run status again after login and continue the pending task when connected. Do not request an API key or create .env in subscription
 mode. The previous version's .env is ignored and can remain untouched. If environment
 variables override subscription authentication, explain which variable names need
 attention; never print their values or change credentials automatically. Do not

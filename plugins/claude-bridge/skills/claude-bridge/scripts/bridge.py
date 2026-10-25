@@ -84,26 +84,88 @@ def api_call(config, messages, max_tokens):
 def subscription_status():
     binary = shutil.which('claude')
     if not binary:
-        return {'installed': False, 'configured': False, 'reason': 'Install official Claude Code, then run claude auth login and sign in with your Claude subscription.'}
+        return {'installed': False, 'configured': False, 'reason_code': 'install_required', 'reason': 'Install official Claude Code, then run claude auth login and sign in with your Claude subscription.'}
     # Do not read, copy or export OAuth credentials. The official binary owns login.
     overrides = [name for name in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN',
                  'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_USE_BEDROCK',
                  'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY') if os.environ.get(name)]
     if overrides:
-        return {'installed': True, 'configured': False, 'reason': 'Authentication/provider environment overrides are set. Remove them for subscription mode, or explicitly choose --backend api.', 'override_names': overrides}
+        return {'installed': True, 'configured': False, 'reason_code': 'auth_override', 'reason': 'Authentication/provider environment overrides are set. Remove them for subscription mode, or explicitly choose --backend api.', 'override_names': overrides}
     try:
         result = subprocess.run([binary, 'auth', 'status', '--json'], capture_output=True,
                                 text=True, encoding='utf-8', timeout=30, shell=False)
         info = json.loads(result.stdout)
     except (OSError, subprocess.TimeoutExpired, ValueError):
-        return {'installed': True, 'configured': False, 'reason': 'Cannot check Claude Code login. Update Claude Code and run claude auth login yourself.'}
+        return {'installed': True, 'configured': False, 'reason_code': 'status_unavailable', 'reason': 'Cannot check Claude Code login. Update Claude Code and run claude auth login yourself.'}
     logged_in = bool(info.get('loggedIn'))
     subscription = info.get('subscriptionType')
     configured = logged_in and info.get('authMethod') == 'claude.ai' and subscription in ('pro', 'max', 'team', 'enterprise')
     # Only non-sensitive login metadata is returned, never email, org IDs or tokens.
     return {'installed': True, 'configured': configured, 'subscription': subscription,
-            'auth_method': info.get('authMethod'),
+            'auth_method': info.get('authMethod'), 'reason_code': None if configured else ('login_required' if not logged_in else 'account_mismatch'),
             'reason': None if configured else 'Run claude auth login yourself and select your Claude subscription account.'}
+
+def ensure_login(state_dir):
+    status = subscription_status()
+    if status.get('configured'):
+        return {'ok': True, **status, 'login_started': False}
+    # Do not replace an existing account, switch providers, or mask setup errors.
+    if status.get('reason_code') != 'login_required':
+        return {'ok': False, **status, 'login_started': False}
+    login_dir = Path(state_dir) / '_login'
+    login_dir.mkdir(parents=True, exist_ok=True)
+    attempt = login_dir / 'attempt.json'
+    lock = login_dir / 'launch.lock'
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        return {'ok': True, 'configured': False, 'login_started': False, 'action_required': 'sign_in', 'message': 'Claude sign-in is starting. Complete the official browser login.'}
+    try:
+        os.close(fd)
+        previous = json.loads(attempt.read_text(encoding='utf-8')) if attempt.exists() else {}
+        age = time.time() - previous.get('started_at', 0)
+        if age < 330:
+            return {'ok': True, 'configured': False, 'login_started': False, 'action_required': 'sign_in', 'message': 'Complete the Claude browser sign-in already started. Check connection again afterward; no duplicate login was launched.'}
+        atomic_json(attempt, {'started_at': time.time(), 'phase': 'starting'})
+        command = [sys.executable, str(Path(__file__).resolve()), '--state-dir', str(Path(state_dir).resolve()), '_login-worker']
+        kwargs = {'stdin': subprocess.DEVNULL, 'stdout': subprocess.DEVNULL, 'stderr': subprocess.DEVNULL, 'shell': False}
+        if os.name == 'nt': kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+        else: kwargs['start_new_session'] = True
+        try:
+            subprocess.Popen(command, **kwargs)
+        except OSError:
+            attempt.unlink(missing_ok=True)
+            raise BridgeError('Could not start official Claude login. Check Claude Code installation and host command permissions.') from None
+        return {'ok': True, 'configured': False, 'login_started': True, 'action_required': 'sign_in', 'message': 'Opening official Claude subscription sign-in in your browser. Complete it there; no key or password should be entered in chat. Then check connection again.'}
+    finally:
+        lock.unlink(missing_ok=True)
+
+def login_worker(state_dir):
+    attempt = Path(state_dir) / '_login' / 'attempt.json'
+    started_at = time.time()
+    try:
+        if attempt.exists(): started_at = json.loads(attempt.read_text(encoding='utf-8')).get('started_at', started_at)
+        # Another process may have signed in between launch and worker startup.
+        status = subscription_status()
+        if status.get('configured'):
+            phase = 'connected'
+        elif status.get('reason_code') != 'login_required':
+            phase = 'blocked'
+        else:
+            binary = shutil.which('claude')
+            # Official CLI opens the browser and saves its own login. No auth
+            # URL, token, callback or credential output is captured by the bridge.
+            with tempfile.TemporaryDirectory(prefix='code-bridge-login-') as scratch:
+                subprocess.run([binary, 'auth', 'login', '--claudeai'], cwd=scratch,
+                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=300, shell=False)
+            phase = 'connected' if subscription_status().get('configured') else 'not_connected'
+    except subprocess.TimeoutExpired:
+        phase = 'timeout'
+    except (OSError, ValueError):
+        phase = 'failed'
+    atomic_json(attempt, {'started_at': started_at, 'phase': phase})
+    return {'ok': phase == 'connected', 'configured': phase == 'connected'}
 
 def subscription_call(messages, project=None, native_session_id=None, session_name="main"):
     status = subscription_status()
@@ -191,6 +253,9 @@ def ask(args):
     backend=getattr(args, 'backend', 'subscription')
     cfg=read_config(args.env_file) if backend == 'api' else {}
     project, state_path = session_path(args)
+    if backend == 'subscription':
+        connection = ensure_login(args.state_dir)
+        if not connection.get('configured'): return {'backend':backend, **connection, 'task_submitted':False}
     lock=state_path.with_suffix('.lock');lock.parent.mkdir(parents=True,exist_ok=True)
     try: fd=os.open(lock,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600)
     except FileExistsError: raise BridgeError('Session busy. If the previous process crashed, ask GPT to inspect the stale session lock.') from None
@@ -219,6 +284,8 @@ def main():
     p.add_argument('--env-file',type=Path,default=DEFAULT_HOME/'.env')
     p.add_argument('--state-dir',type=Path,default=DEFAULT_HOME/'sessions')
     sub=p.add_subparsers(dest='action',required=True)
+    sub.add_parser('ensure-login', help='Check connection and automatically launch official browser login if signed out.')
+    sub.add_parser('_login-worker', help=argparse.SUPPRESS)
     sub.add_parser('init-config', help='Create a private placeholder .env without overwriting existing credentials.')
     sub.add_parser('status',help='Check the selected backend without sending a model prompt or displaying credentials.')
     sub.add_parser('setup-token',help='Run by the human in their own terminal. Hidden input; never use a chat tool to enter a key.')
@@ -227,6 +294,11 @@ def main():
     info.add_argument('--project',type=Path,required=True); info.add_argument('--session',default='main')
     args=p.parse_args()
     try:
+        if args.action == '_login-worker':
+            return 0 if login_worker(args.state_dir)['ok'] else 1
+        if args.action == 'ensure-login':
+            print(json.dumps(ensure_login(args.state_dir),ensure_ascii=False))
+            return 0
         if args.action == 'session-info':
             print(json.dumps(session_info(args),ensure_ascii=False))
             return 0

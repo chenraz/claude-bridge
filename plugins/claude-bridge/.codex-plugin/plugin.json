@@ -1,6 +1,6 @@
 {
   "name": "claude-bridge",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Use your own Claude Code subscription from a local desktop chat, with GPT reviewing the work.",
   "author": {
     "name": "chenraz"
@@ -12,5 +12,10 @@
     "longDescription": "Runs the official Claude Code CLI with your own subscription sign-in. GPT reviews proposed code and applies authorized changes. No API key required in the default mode.",
     "developerName": "chenraz",
     "category": "Productivity"
+  },
+  "extensions": {
+    "com.openai": {
+      "onboardingSkill": "./skills/setup/SKILL.md"
+    }
   }
 }
