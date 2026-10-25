@@ -5,7 +5,7 @@ ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('bridge',ROOT/'claude-bridge/scripts/bridge.py'); b=importlib.util.module_from_spec(spec);spec.loader.exec_module(b)
 class Tests(unittest.TestCase):
  def setUp(self):
-  self.temp=tempfile.TemporaryDirectory();self.p=Path(self.temp.name);self.project=self.p/'app';self.project.mkdir();self.env=self.p/'.env';self.env.write_text('ANTHROPIC_API_KEY=test-secret\n');self.task=self.p/'task.txt';self.task.write_text('Make an app');self.args=argparse.Namespace(env_file=self.env,state_dir=self.p/'sessions',project=self.project,session='main',prompt_file=self.task,context_file=[],max_tokens=4096)
+  self.temp=tempfile.TemporaryDirectory();self.p=Path(self.temp.name);self.project=self.p/'app';self.project.mkdir();self.env=self.p/'.env';self.env.write_text('ANTHROPIC_API_KEY=test-secret\n');self.task=self.p/'task.txt';self.task.write_text('Make an app');self.args=argparse.Namespace(backend='api',env_file=self.env,state_dir=self.p/'sessions',project=self.project,session='main',prompt_file=self.task,context_file=[],max_tokens=4096)
  def tearDown(self):self.temp.cleanup()
  def test_history_and_project_isolation(self):
   seen=[]
@@ -32,7 +32,7 @@ class Tests(unittest.TestCase):
   text=b.make_prompt('task',[str(f)],self.project,self.env)
   self.assertIn('const a = 1',text);self.assertNotIn('do not send',text)
  def test_status_never_prints_token(self):
-  r=subprocess.run([sys.executable,str(ROOT/'claude-bridge/scripts/bridge.py'),'--env-file',str(self.env),'status'],capture_output=True,text=True)
+  r=subprocess.run([sys.executable,str(ROOT/'claude-bridge/scripts/bridge.py'),'--backend','api','--env-file',str(self.env),'status'],capture_output=True,text=True)
   self.assertEqual(r.returncode,0);self.assertTrue(json.loads(r.stdout)['configured']);self.assertNotIn('test-secret',r.stdout+r.stderr)
  def test_init_config_creates_private_file_and_preserves_key(self):
   new=self.p/'config'/'.env';self.assertTrue(b.init_config(new)['created'])

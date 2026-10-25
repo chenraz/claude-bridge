@@ -1,15 +1,15 @@
 {
   "name": "claude-bridge",
-  "version": "0.1.0",
-  "description": "Use Claude from your local desktop chat, with GPT reviewing and explaining the work.",
+  "version": "0.2.0",
+  "description": "Use your own Claude Code subscription from a local desktop chat, with GPT reviewing the work.",
   "author": {
     "name": "chenraz"
   },
   "skills": "./skills/",
   "interface": {
-    "displayName": "Claude Bridge",
-    "shortDescription": "Work with Claude from this desktop chat",
-    "longDescription": "GPT sends tasks to Claude through your own API key, reviews the results and applies authorized changes. Requires Python 3.10+ and local command access.",
+    "displayName": "Desktop Code Bridge",
+    "shortDescription": "Use your coding subscription from this chat",
+    "longDescription": "Runs the official Claude Code CLI with your own subscription sign-in. GPT reviews proposed code and applies authorized changes. No API key required in the default mode.",
     "developerName": "chenraz",
     "category": "Productivity"
   }

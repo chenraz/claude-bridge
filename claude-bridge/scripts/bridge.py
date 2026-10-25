@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Claude API bridge for a local desktop assistant. No UI or code execution."""
+"""Local desktop bridge to official Claude Code (subscription), or explicit API mode."""
 import argparse
 import getpass
 import hashlib
@@ -7,6 +7,8 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -77,6 +79,63 @@ def api_call(config, messages, max_tokens):
     except (urllib.error.URLError, TimeoutError):
         raise BridgeError('Claude request failed or timed out. Check your connection. No automatic retry was made; a timed-out request might still be billed.') from None
 
+def subscription_status():
+    binary = shutil.which('claude')
+    if not binary:
+        return {'installed': False, 'configured': False, 'reason': 'Install official Claude Code, then run claude auth login and sign in with your Claude subscription.'}
+    # Do not read, copy or export OAuth credentials. The official binary owns login.
+    overrides = [name for name in ('ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN',
+                 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL', 'CLAUDE_CODE_USE_BEDROCK',
+                 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY') if os.environ.get(name)]
+    if overrides:
+        return {'installed': True, 'configured': False, 'reason': 'Authentication/provider environment overrides are set. Remove them for subscription mode, or explicitly choose --backend api.', 'override_names': overrides}
+    try:
+        result = subprocess.run([binary, 'auth', 'status', '--json'], capture_output=True,
+                                text=True, encoding='utf-8', timeout=30, shell=False)
+        info = json.loads(result.stdout)
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return {'installed': True, 'configured': False, 'reason': 'Cannot check Claude Code login. Update Claude Code and run claude auth login yourself.'}
+    logged_in = bool(info.get('loggedIn'))
+    subscription = info.get('subscriptionType')
+    configured = logged_in and info.get('authMethod') == 'claude.ai' and subscription in ('pro', 'max', 'team', 'enterprise')
+    # Only non-sensitive login metadata is returned, never email, org IDs or tokens.
+    return {'installed': True, 'configured': configured, 'subscription': subscription,
+            'auth_method': info.get('authMethod'),
+            'reason': None if configured else 'Run claude auth login yourself and select your Claude subscription account.'}
+
+def subscription_call(messages):
+    status = subscription_status()
+    if not status.get('configured'):
+        raise BridgeError(status['reason'])
+    binary = shutil.which('claude')
+    # --safe-mode keeps subscription authentication but disables user/project
+    # customizations. --bare must NOT be used: it disables subscription login.
+    command = [binary, '--safe-mode', '-p', '--output-format', 'json', '--tools', '',
+               '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
+               '--disallowedTools', 'mcp__*', '--no-session-persistence',
+               '--max-turns', '1', '--append-system-prompt', SYSTEM]
+    prompt = 'Continue this task conversation. Reply to the latest user message.\n' + json.dumps(messages, ensure_ascii=False)
+    # Run outside the customer project. Only explicitly selected context is sent.
+    with tempfile.TemporaryDirectory(prefix='desktop-code-bridge-') as scratch:
+        try:
+            result = subprocess.run(command, input=prompt, capture_output=True, text=True,
+                                    encoding='utf-8', cwd=scratch, timeout=300, shell=False)
+        except subprocess.TimeoutExpired:
+            raise BridgeError('Claude Code timed out. No retry or API fallback was made. Check subscription usage before retrying.') from None
+        except OSError:
+            raise BridgeError('Cannot start Claude Code. Install or update the official CLI.') from None
+    try:
+        response = json.loads(result.stdout)
+    except ValueError:
+        raise BridgeError('Claude Code returned no structured result. Update Claude Code and check your login. No API fallback was made.') from None
+    if result.returncode or response.get('is_error'):
+        raise BridgeError('Claude Code could not complete the task. Check your subscription limits and login in Claude Code. No automatic API fallback was made.')
+    text = response.get('result')
+    if not isinstance(text, str) or not text.strip():
+        raise BridgeError('Claude Code returned no text result.')
+    return {'content': [{'type': 'text', 'text': text}], 'model': 'Claude Code account default',
+            'usage': response.get('usage', {}), 'stop_reason': 'end_turn'}
+
 def make_prompt(prompt, context_paths, project, env_file):
     chunks=[prompt]
     for raw in context_paths:
@@ -93,7 +152,8 @@ def make_prompt(prompt, context_paths, project, env_file):
     return text
 
 def ask(args):
-    cfg=read_config(args.env_file)
+    backend=getattr(args, 'backend', 'subscription')
+    cfg=read_config(args.env_file) if backend == 'api' else {}
     project=args.project.resolve()
     if not project.is_dir(): raise BridgeError('Project folder does not exist.')
     if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', args.session): raise BridgeError('Session name must use letters, numbers, - or _.')
@@ -110,29 +170,34 @@ def ask(args):
         if not prompt.strip(): raise BridgeError('A nonempty task is required via stdin or --prompt-file.')
         content=make_prompt(prompt,args.context_file,project,args.env_file)
         messages=state['messages']+[{'role':'user','content':content}]
-        response=api_call(cfg,messages,args.max_tokens)
+        response=subscription_call(messages) if backend == 'subscription' else api_call(cfg,messages,args.max_tokens)
         blocks=response.get('content',[])
         if not blocks: raise BridgeError('Claude returned no content. Session not saved.')
         text='\n\n'.join(b['text'] for b in blocks if b.get('type')=='text')
         state['messages']=messages+[{'role':'assistant','content':blocks}]
         state['updated_at']=int(time.time()); atomic_json(state_path,state)
-        return {'ok':True,'text':text,'model':response.get('model'), 'usage':response.get('usage',{}),'stop_reason':response.get('stop_reason'),'session':args.session,'project':str(project),'notice':'Review this response before applying changes. Claude has not executed any code.'}
+        return {'ok':True,'backend':backend,'text':text,'model':response.get('model'), 'usage':response.get('usage',{}),'stop_reason':response.get('stop_reason'),'session':args.session,'project':str(project),'notice':'Review this response before applying changes. Claude has not executed any code.'}
     finally: lock.unlink(missing_ok=True)
 
 def main():
     os.umask(0o077)
     p=argparse.ArgumentParser(description=__doc__)
+    p.add_argument('--backend', choices=('subscription','api'), default='subscription', help='Default: official Claude Code subscription login. API mode requires explicit selection.')
     p.add_argument('--env-file',type=Path,default=DEFAULT_HOME/'.env')
     p.add_argument('--state-dir',type=Path,default=DEFAULT_HOME/'sessions')
     sub=p.add_subparsers(dest='action',required=True)
     sub.add_parser('init-config', help='Create a private placeholder .env without overwriting existing credentials.')
-    sub.add_parser('status',help='Local configuration check; no network call, no key printed.')
+    sub.add_parser('status',help='Check the selected backend without sending a model prompt or displaying credentials.')
     sub.add_parser('setup-token',help='Run by the human in their own terminal. Hidden input; never use a chat tool to enter a key.')
     q=sub.add_parser('ask');q.add_argument('--project',type=Path,required=True);q.add_argument('--session',default='main');q.add_argument('--prompt-file',type=Path);q.add_argument('--context-file',type=Path,action='append',default=[]);q.add_argument('--max-tokens',type=int,default=4096,choices=range(256,16385),metavar='256..16384')
     args=p.parse_args()
     try:
+        if args.action in ('init-config', 'setup-token') and args.backend != 'api':
+            raise BridgeError('Subscription mode needs no API key or .env. Run claude auth login yourself. For optional API mode, explicitly pass --backend api.')
         if args.action=='init-config':
             result=init_config(args.env_file)
+        elif args.action=='status' and args.backend=='subscription':
+            result={'ok':True,'backend':'subscription',**subscription_status(),'network_tested':False}
         elif args.action=='status':
             cfg=read_config(args.env_file)
             result={'ok':True,'configured':ready_key(cfg),'env_file':str(args.env_file),'model':cfg.get('CLAUDE_MODEL') or 'claude-sonnet-5-5','network_tested':False}

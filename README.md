@@ -1,8 +1,11 @@
-# Claude Bridge
+# Desktop Code Bridge
 
-Work with Claude from your existing local Codex desktop chat. You talk to GPT;
-GPT sends implementation tasks to Claude, reviews the replies, applies authorized
-changes, runs available checks and explains the results. No separate GUI or server.
+Use your own **Claude Code subscription** from your local GPT/Codex desktop chat.
+You describe the app; GPT sends tasks to the official Claude Code CLI, reviews the
+proposed code, applies authorized changes and explains the result. No second GUI.
+
+The package ID and repository remain `claude-bridge` for existing installations.
+**Version 0.2.0 changes the default from API keys to Claude Code subscription sign-in.**
 
 ## Install through the desktop interface
 
@@ -10,101 +13,92 @@ In **Plugins > Add marketplace**, enter:
 
 - **Source:** `https://github.com/chenraz/claude-bridge`
 - **Git ref:** `main`
-- **Sparse paths:** leave completely empty.
+- **Sparse paths:** completely empty.
 
-Select **Add marketplace**, then install **Claude Bridge** from **Chenraz Tools**.
-Start a new local chat and ask `Use Claude Bridge. Set up my local configuration.`
-Then enter your own key in the local `.env` file as described below.
+Select **Add marketplace**, then install **Desktop Code Bridge** from **Chenraz Tools**.
+If upgrading, refresh/sync the marketplace and update or reinstall the plugin.
+Open a new local chat so the new skill instructions are loaded.
 
-The Source must be the repository URL, with no `/tree/main/claude-bridge` suffix.
-A folder URL is only used by the separate skill-installer route below.
-The repository includes a marketplace catalog and a plugin manifest for this flow.
-If you previously installed the standalone skill, use one installation route to
-avoid duplicate skill entries.
-
-## Alternative: install the standalone skill from GitHub
-
-In a **local Codex desktop chat**, send:
+Alternative standalone skill installation:
 
 ```text
 Use $skill-installer to install the skill from:
 https://github.com/chenraz/claude-bridge/tree/main/claude-bridge
 ```
 
-Start a new chat if the skill is not visible; restart the app if needed. Then send:
+Use one installation route to avoid duplicate skills.
+
+## One-time customer setup: sign in, no API key
+
+1. Install the **official Claude Code CLI** using
+   [Anthropic's setup instructions](https://code.claude.com/docs/en/setup).
+2. In your own terminal, run `claude auth login` and complete the official browser
+   sign-in with the account that holds your Claude Pro/Max subscription. Choose
+   the Claude subscription account rather than Console/API billing.
+3. In your local desktop chat, write:
 
 ```text
-Use $claude-bridge. Set up my local configuration, then help me build my app.
+Use Claude Bridge for all app-development work in this chat until I tell you to stop.
+Check my Claude Code subscription login, then help me build my app.
 ```
 
-The skill runs its bundled `init-config` command to create a placeholder credential
-file and reports its exact location. It never overwrites an existing file.
+The bridge checks sanitized authentication metadata before each task. Each customer
+uses their own subscription and authenticates directly with Anthropic. No password,
+API key, exported OAuth token or .env file is needed in the default mode.
 
-**Requirements:** Python 3.10+, local file/command tools and network access in the
-host app, and your own funded Claude API account. Installing the skill does not
-install Python. The assistant can use a compatible bundled Python if available.
-A file-upload-only chat cannot run this helper.
+**Requirements:** recent official Claude Code CLI (including `--safe-mode` support),
+Python 3.10+, local file/command tools and network access in the desktop app.
+A file-upload-only chat cannot run it. The host app's subscription requirements
+are independent from your Claude subscription.
 
-## Add your own Claude API key
+[מדריך קצר בעברית (PDF)](docs/guide-he.pdf)
 
-Create a key in [Claude Console](https://platform.claude.com/settings/keys).
-Open the local file in a text editor:
+## Existing API users
 
-- Windows: `%USERPROFILE%\.claude-bridge\.env`
-- macOS/Linux: `~/.claude-bridge/.env`
+The old `~/.claude-bridge/.env` file is **ignored by subscription mode**. You do not
+need to delete it. Authentication/provider environment overrides such as
+`ANTHROPIC_API_KEY` are detected; the bridge stops and explains what to review
+instead of silently billing the API. Variable values are never returned.
 
-Replace the placeholder, keep the filename exactly `.env`, then save:
+The helper retains optional, separately billed API mode for users who explicitly
+choose it, by putting `--backend api` before the subcommand. Only this mode uses
+`.env`, `init-config` and `setup-token`. Subscription mode never calls the Messages
+API directly and never reads or exports Claude Code's OAuth credential files.
 
-```dotenv
-ANTHROPIC_API_KEY=PASTE_YOUR_KEY_HERE
-CLAUDE_MODEL=claude-sonnet-5-5
-```
+## Permissions, usage and privacy
 
-The path printed by the helper is authoritative. **Never paste the key into chat,
-commit it, or send it to the distributor.** Each customer uses their own key.
-Optional: set `ANTHROPIC_WORKSPACE_ID` if your key needs an explicit workspace.
-Environment variables override file values.
+The unmodified official Claude Code binary runs in **safe mode**, with built-in
+tools and MCP tools disabled. It produces code proposals; GPT reviews and applies
+them using the desktop app's existing permissions. No approval-bypass flags are
+used. Do not use `--bare`: it disables subscription login.
 
-Tell GPT you saved the key. It can run `status` without displaying the key.
-The first real task verifies API access and incurs API usage.
+The helper invokes Claude Code without tools or subagents. It sends the task,
+explicitly selected context and saved conversation history over stdin. Claude Code
+runs outside the project in a temporary directory. The helper saves its own plain
+text JSON history under `~/.claude-bridge/sessions`, scoped by project path.
+Never share those histories or send secrets in a prompt.
 
-[מדריך התקנה קצר בעברית (PDF)](docs/guide-he.pdf)
+Normal **Claude subscription limits** apply. The helper performs no API fallback
+and no automatic retries. It does not change the customer's account billing or
+extra-usage settings. If extra usage is enabled on the account, those account
+settings still apply; review them in Claude to control spending.
 
-## Permissions and limitations
+## Development and verification
 
-Claude generates proposals and code; the helper itself executes no generated
-code and has no file-edit tools. GPT reviews and applies changes with the desktop
-app's existing permissions. This skill cannot change approval modes or approve
-human-only requests. There are no Claude Code permission dialogs: this uses the API.
-
-API calls are billed separately from a Claude chat subscription. Each helper call
-makes one API request with no automatic retries. The default output limit is 4096
-tokens. Set account spending controls in Claude Console; this is not a dollar cap.
-Live Claude access was not tested with a real key before publication.
-
-Task text, explicitly selected project context and the session history are sent
-to Anthropic. Local history is plain-text JSON in `~/.claude-bridge/sessions` and
-is separated by project path. Credential files are excluded from context by the
-helper, but users and GPT must still avoid putting secrets in task text.
-
-The `.env` file is plain text. New files are mode 600 on Linux/macOS; on Windows,
-normal inherited account permissions apply. Store it in a private user directory.
-
-## Development
-
-Python standard library only. Run from the repository root:
+Python standard library only:
 
 ```sh
 python3 -m unittest discover -s tests -v
+python3 claude-bridge/scripts/bridge.py status
 ```
 
-The tests use mocked API responses and temporary fake keys. They check history
-isolation, failure recovery, selected context, credential exclusions, configuration
-creation, secret-free status output and the single-request API payload.
+The API backend's `--max-tokens` only applies to API mode. Claude Code uses its own
+response limits. Local persistence caps conversation turns and selected context.
 
-The helper also supports `--env-file` and `--state-dir` before its subcommand.
-Run `python3 claude-bridge/scripts/bridge.py --help` for details.
+The tests cover session isolation, credential exclusions, API behavior, subscription
+login checks, CLI arguments, absence of API fallback and marketplace packaging.
 
-Installation references: [OpenAI skills documentation](https://learn.chatgpt.com/docs/build-skills).
-API references: [Messages API](https://platform.claude.com/docs/en/api/messages/create),
-[models](https://platform.claude.com/docs/en/models/overview).
+References: [subscription login](https://support.claude.com/en/articles/11145838-use-claude-code-with-your-pro-or-max-plan),
+[programmatic CLI](https://code.claude.com/docs/en/headless),
+[third-party product conditions](https://code.claude.com/docs/en/legal-and-compliance),
+[OpenAI skills](https://learn.chatgpt.com/docs/build-skills).
