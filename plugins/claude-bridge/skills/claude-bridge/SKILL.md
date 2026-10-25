@@ -6,8 +6,8 @@ description: Use the customer's Claude Code subscription as an implementation pa
 Keep this desktop chat as the interface. The user talks to you; you write technical
 requests for Claude Code, review its replies and explain results in plain language.
 If asked to use this workflow for the whole chat, retain that instruction for
-subsequent app-development tasks until the user changes it. Do not launch a GUI,
-web server or second chat window.
+subsequent app-development tasks until the user changes it. Do not launch a GUI or web server. Open a second session window only when the
+user explicitly asks to inspect or resume the Claude Code conversation.
 
 ## Default: the customer's subscription
 Resolve `scripts/bridge.py` relative to this SKILL.md. Use Python 3.10+.
@@ -35,7 +35,8 @@ No automatic switch to API billing is implemented by this helper.
 2. Run `python3 <bridge.py> ask --project <project-directory> --session main --prompt-file <task-file>`.
    Add repeated `--context-file <absolute-path>` only for relevant authorized
    project files. The helper sends the task, chosen context and saved session
-   history through the unmodified official Claude Code CLI. No direct API call is
+   history through the unmodified official Claude Code CLI. Version 0.3 saves and
+   resumes a native named Claude Code session, with its workspace set to the project. No direct API call is
    made in subscription mode.
 3. Review the returned JSON. Claude Code runs in safe mode, with built-in and MCP
    tools disabled; it provides proposed code, and does not execute local actions.
@@ -45,7 +46,16 @@ No automatic switch to API billing is implemented by this helper.
 4. Reuse the project path and session for continuity. Sessions are scoped by absolute
    project path and saved under ~/.claude-bridge/sessions. Start another session with
    a project summary when history grows. Never distribute session files.
-5. Explain results in the user's language. After three unsuccessful corrections
+5. When the user asks to see the Claude session, run
+   `python3 <bridge.py> session-info --project <project-directory> --session main`.
+   Show the returned native session ID and terminal `resume_command`, and tell the
+   user to run it from the project folder. Do not dump raw JSON conversation files.
+   This resumes the actual saved local Claude Code conversation, with tools still
+   disabled. It does not sync a chat to claude.ai. On supported macOS/Windows Claude
+   Desktop installations, `claude --desktop --resume <native-session-id>` can open
+   it in the desktop Code interface; do not promise that on Linux. If no native ID
+   exists, explain that pre-0.3 history is imported on the next successful task.
+6. Explain results in the user's language. After three unsuccessful corrections
    for the same issue, report the blocker and a concrete next step. If a quota or
    login error occurs, stop and explain; do not silently implement a fallback.
 

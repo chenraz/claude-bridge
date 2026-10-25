@@ -26,3 +26,24 @@ class SubscriptionTests(unittest.TestCase):
    with self.assertRaises(b.BridgeError):b.subscription_call([])
    api.assert_not_called()
 if __name__=='__main__':unittest.main()
+
+class NativeSessionTests(unittest.TestCase):
+ def test_first_call_saves_named_session_and_resume_sends_only_new_turn(self):
+  session_id='11111111-1111-4111-8111-111111111111'
+  response=subprocess.CompletedProcess([],0,json.dumps({'result':'done','is_error':False}),'')
+  messages=[{'role':'user','content':'older task'},{'role':'assistant','content':'older result'},{'role':'user','content':'new task'}]
+  with patch.object(b,'subscription_status',return_value={'configured':True}),patch.object(b.shutil,'which',return_value='/official/claude'),patch.object(b.subprocess,'run',return_value=response) as run,patch.dict(os.environ,{},clear=True):
+   first=b.subscription_call(messages,project=Path.cwd(),session_name='main')
+   command=run.call_args[0][0];self.assertIn('--session-id',command);self.assertIn('--name',command);self.assertNotIn('--no-session-persistence',command);self.assertIn('older task',run.call_args.kwargs['input'])
+   self.assertTrue(first['native_session_id'])
+   b.subscription_call(messages,project=Path.cwd(),native_session_id=session_id)
+   command=run.call_args[0][0];self.assertIn('--resume',command);self.assertNotIn('--session-id',command);self.assertEqual(run.call_args.kwargs['input'],'new task')
+ def test_session_info_reveals_metadata_only(self):
+  import argparse,tempfile
+  with tempfile.TemporaryDirectory() as tmp:
+   root=Path(tmp);args=argparse.Namespace(project=root,session='main',state_dir=root/'state')
+   project,path=b.session_path(args);b.atomic_json(path,{'native_session_id':'11111111-1111-4111-8111-111111111111','messages':[{'role':'user','content':'PRIVATE_CONVERSATION'}]})
+   info=b.session_info(args);self.assertIn('--resume',info['resume_command']);self.assertNotIn('PRIVATE_CONVERSATION',json.dumps(info))
+ def test_disabled_history_is_not_silently_accepted(self):
+  with patch.object(b,'subscription_status',return_value={'configured':True}),patch.dict(os.environ,{'CLAUDE_CODE_SKIP_PROMPT_HISTORY':'1'}):
+   with self.assertRaises(b.BridgeError):b.subscription_call([])

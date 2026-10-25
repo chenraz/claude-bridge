@@ -8,6 +8,8 @@ import os
 from pathlib import Path
 import re
 import shutil
+import shlex
+import uuid
 import subprocess
 import sys
 import tempfile
@@ -103,27 +105,37 @@ def subscription_status():
             'auth_method': info.get('authMethod'),
             'reason': None if configured else 'Run claude auth login yourself and select your Claude subscription account.'}
 
-def subscription_call(messages):
+def subscription_call(messages, project=None, native_session_id=None, session_name="main"):
     status = subscription_status()
     if not status.get('configured'):
         raise BridgeError(status['reason'])
+    if os.environ.get('CLAUDE_CODE_SKIP_PROMPT_HISTORY'):
+        raise BridgeError('CLAUDE_CODE_SKIP_PROMPT_HISTORY disables native session saving. Unset it to use saved bridge sessions.')
     binary = shutil.which('claude')
+    project = Path(project or Path.cwd()).resolve()
+    session_id = str(uuid.UUID(native_session_id)) if native_session_id else str(uuid.uuid4())
     # --safe-mode keeps subscription authentication but disables user/project
     # customizations. --bare must NOT be used: it disables subscription login.
     command = [binary, '--safe-mode', '-p', '--output-format', 'json', '--tools', '',
                '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
-               '--disallowedTools', 'mcp__*', '--no-session-persistence',
+               '--disallowedTools', 'mcp__*',
                '--max-turns', '1', '--append-system-prompt', SYSTEM]
-    prompt = 'Continue this task conversation. Reply to the latest user message.\n' + json.dumps(messages, ensure_ascii=False)
-    # Run outside the customer project. Only explicitly selected context is sent.
-    with tempfile.TemporaryDirectory(prefix='desktop-code-bridge-') as scratch:
-        try:
-            result = subprocess.run(command, input=prompt, capture_output=True, text=True,
-                                    encoding='utf-8', cwd=scratch, timeout=300, shell=False)
-        except subprocess.TimeoutExpired:
-            raise BridgeError('Claude Code timed out. No retry or API fallback was made. Check subscription usage before retrying.') from None
-        except OSError:
-            raise BridgeError('Cannot start Claude Code. Install or update the official CLI.') from None
+    if native_session_id:
+        command.extend(['--resume', session_id])
+        # Native Claude Code already has earlier turns. Send only the new task.
+        prompt = messages[-1]['content']
+        if not isinstance(prompt, str): prompt = json.dumps(prompt, ensure_ascii=False)
+    else:
+        command.extend(['--session-id', session_id, '--name', 'Bridge: ' + project.name + ' / ' + session_name])
+        # Seed older bridge-only history once when migrating a pre-0.3 session.
+        prompt = messages[0]['content'] if len(messages) == 1 else 'Continue this task conversation. Reply to the latest user message.\n' + json.dumps(messages, ensure_ascii=False)
+    try:
+        result = subprocess.run(command, input=prompt, capture_output=True, text=True,
+                                encoding='utf-8', cwd=project, timeout=300, shell=False)
+    except subprocess.TimeoutExpired:
+        raise BridgeError('Claude Code timed out. Its native transcript may contain a partial turn. No retry or API fallback was made.') from None
+    except OSError:
+        raise BridgeError('Cannot start Claude Code. Install or update the official CLI.') from None
     try:
         response = json.loads(result.stdout)
     except ValueError:
@@ -134,7 +146,7 @@ def subscription_call(messages):
     if not isinstance(text, str) or not text.strip():
         raise BridgeError('Claude Code returned no text result.')
     return {'content': [{'type': 'text', 'text': text}], 'model': 'Claude Code account default',
-            'usage': response.get('usage', {}), 'stop_reason': 'end_turn'}
+            'usage': response.get('usage', {}), 'stop_reason': 'end_turn', 'native_session_id': session_id}
 
 def make_prompt(prompt, context_paths, project, env_file):
     chunks=[prompt]
@@ -151,14 +163,34 @@ def make_prompt(prompt, context_paths, project, env_file):
     if len(text.encode())>500000: raise BridgeError('Request exceeds 500 KB. Send only relevant context.')
     return text
 
+def session_path(args):
+    project = args.project.resolve()
+    if not project.is_dir(): raise BridgeError('Project folder does not exist.')
+    if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', args.session):
+        raise BridgeError('Session name must use letters, numbers, - or _.')
+    scope = hashlib.sha256(str(project).encode()).hexdigest()[:20]
+    return project, args.state_dir / scope / (args.session + '.json')
+
+def session_details(project, session_name, state):
+    native_id = state.get('native_session_id')
+    if not native_id:
+        return {'native_session_id': None, 'notice': 'No native Claude Code session yet. Pre-0.3 bridge history is imported on the next successful subscription task.'}
+    native_id = str(uuid.UUID(native_id))
+    argv = ['claude', '--safe-mode', '--resume', native_id, '--tools', '',
+            '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}', '--disallowedTools', 'mcp__*']
+    return {'native_session_id': native_id, 'session': session_name, 'project': str(project),
+            'resume_argv': argv, 'resume_command': subprocess.list2cmdline(argv) if os.name == 'nt' else shlex.join(argv),
+            'notice': 'Run this command in a terminal in the project folder to inspect/resume the saved local Claude Code conversation. It does not create an ordinary claude.ai web chat.'}
+
+def session_info(args):
+    project, path = session_path(args)
+    state = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+    return {'ok': True, **session_details(project, args.session, state)}
+
 def ask(args):
     backend=getattr(args, 'backend', 'subscription')
     cfg=read_config(args.env_file) if backend == 'api' else {}
-    project=args.project.resolve()
-    if not project.is_dir(): raise BridgeError('Project folder does not exist.')
-    if not re.fullmatch(r'[A-Za-z0-9_-]{1,64}', args.session): raise BridgeError('Session name must use letters, numbers, - or _.')
-    scope=hashlib.sha256(str(project).encode()).hexdigest()[:20]
-    state_path=args.state_dir/scope/(args.session+'.json')
+    project, state_path = session_path(args)
     lock=state_path.with_suffix('.lock');lock.parent.mkdir(parents=True,exist_ok=True)
     try: fd=os.open(lock,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600)
     except FileExistsError: raise BridgeError('Session busy. If the previous process crashed, ask GPT to inspect the stale session lock.') from None
@@ -170,13 +202,14 @@ def ask(args):
         if not prompt.strip(): raise BridgeError('A nonempty task is required via stdin or --prompt-file.')
         content=make_prompt(prompt,args.context_file,project,args.env_file)
         messages=state['messages']+[{'role':'user','content':content}]
-        response=subscription_call(messages) if backend == 'subscription' else api_call(cfg,messages,args.max_tokens)
+        response=subscription_call(messages, project=project, native_session_id=state.get('native_session_id'), session_name=args.session) if backend == 'subscription' else api_call(cfg,messages,args.max_tokens)
         blocks=response.get('content',[])
         if not blocks: raise BridgeError('Claude returned no content. Session not saved.')
         text='\n\n'.join(b['text'] for b in blocks if b.get('type')=='text')
         state['messages']=messages+[{'role':'assistant','content':blocks}]
+        if backend == 'subscription': state['native_session_id'] = response['native_session_id']
         state['updated_at']=int(time.time()); atomic_json(state_path,state)
-        return {'ok':True,'backend':backend,'text':text,'model':response.get('model'), 'usage':response.get('usage',{}),'stop_reason':response.get('stop_reason'),'session':args.session,'project':str(project),'notice':'Review this response before applying changes. Claude has not executed any code.'}
+        return {'ok':True,'backend':backend,'text':text,'model':response.get('model'), 'usage':response.get('usage',{}),'stop_reason':response.get('stop_reason'),'session':args.session,'project':str(project),'native_session':session_details(project,args.session,state) if backend == 'subscription' else None,'notice':'Review this response before applying changes. Claude has not executed any code.'}
     finally: lock.unlink(missing_ok=True)
 
 def main():
@@ -190,8 +223,13 @@ def main():
     sub.add_parser('status',help='Check the selected backend without sending a model prompt or displaying credentials.')
     sub.add_parser('setup-token',help='Run by the human in their own terminal. Hidden input; never use a chat tool to enter a key.')
     q=sub.add_parser('ask');q.add_argument('--project',type=Path,required=True);q.add_argument('--session',default='main');q.add_argument('--prompt-file',type=Path);q.add_argument('--context-file',type=Path,action='append',default=[]);q.add_argument('--max-tokens',type=int,default=4096,choices=range(256,16385),metavar='256..16384')
+    info=sub.add_parser('session-info',help='Show the native session ID and reopen command, without printing conversation contents.')
+    info.add_argument('--project',type=Path,required=True); info.add_argument('--session',default='main')
     args=p.parse_args()
     try:
+        if args.action == 'session-info':
+            print(json.dumps(session_info(args),ensure_ascii=False))
+            return 0
         if args.action in ('init-config', 'setup-token') and args.backend != 'api':
             raise BridgeError('Subscription mode needs no API key or .env. Run claude auth login yourself. For optional API mode, explicitly pass --backend api.')
         if args.action=='init-config':

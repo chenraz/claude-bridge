@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "claude-bridge",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Use your own Claude Code subscription from a local desktop chat, with GPT reviewing the work.",
   "author": {
     "name": "chenraz"

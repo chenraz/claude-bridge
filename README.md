@@ -5,7 +5,7 @@ You describe the app; GPT sends tasks to the official Claude Code CLI, reviews t
 proposed code, applies authorized changes and explains the result. No second GUI.
 
 The package ID and repository remain `claude-bridge` for existing installations.
-**Version 0.2.0 changes the default from API keys to Claude Code subscription sign-in.**
+**Version 0.3.0 keeps subscription sign-in and adds persistent native Claude Code sessions.**
 
 ## Install through the desktop interface
 
@@ -74,7 +74,7 @@ used. Do not use `--bare`: it disables subscription login.
 
 The helper invokes Claude Code without tools or subagents. It sends the task,
 explicitly selected context and saved conversation history over stdin. Claude Code
-runs outside the project in a temporary directory. The helper saves its own plain
+runs in the selected project with safe mode and tools disabled. The helper saves its own plain
 text JSON history under `~/.claude-bridge/sessions`, scoped by project path.
 Never share those histories or send secrets in a prompt.
 
@@ -82,6 +82,40 @@ Normal **Claude subscription limits** apply. The helper performs no API fallback
 and no automatic retries. It does not change the customer's account billing or
 extra-usage settings. If extra usage is enabled on the account, those account
 settings still apply; review them in Claude to control spending.
+
+## View the real Claude Code conversation
+
+After a successful subscription task, the result contains a `native_session` object
+with a native UUID and an exact terminal reopen command. Ask the desktop assistant:
+
+```text
+Show me the Claude Code session for this project.
+```
+
+The assistant runs:
+
+```sh
+python3 claude-bridge/scripts/bridge.py session-info --project /your/project --session main
+```
+
+Run the returned `resume_command` in a terminal from the project folder. Native
+sessions are named `Bridge: PROJECT / SESSION` and saved by official Claude Code;
+subsequent bridge tasks use `--resume` with the same UUID. The helper no longer uses
+`--no-session-persistence`. A bridge name such as `main` is still distinct from the
+native UUID; use the returned command rather than guessing `claude --resume main`.
+
+On supported macOS/x64 Windows with Claude Desktop, the official CLI also supports
+`claude --desktop --resume NATIVE_UUID`. Local terminal sessions do not become
+ordinary conversations on claude.ai; Linux users should use the terminal command.
+
+For bridge conversations created before 0.3, the next successful task imports the
+saved bridge history into a new native session. There is no retroactive native
+transcript until that task succeeds. Keep one process writing to a session at a
+time; close an interactive resumed session before sending another bridge task.
+
+The native transcript now persists under Claude Code's own local storage as well
+as bridge history. Do not distribute either. A timeout may leave a partial native
+turn; no automatic retry is made. Reopen the session to inspect it before retrying.
 
 ## Development and verification
 
